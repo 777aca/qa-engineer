@@ -1,0 +1,97 @@
+project: 订单模块测试
+version: v1.2.0
+author: QA Team
+created: 2026-04-21
+
+cases:
+  - id: TC-ORDER-001
+    module: 订单创建
+    sub_module: 正常下单
+    priority: P0
+    title: 使用默认地址+默认支付方式下单成功
+    preconditions:
+      - 已登录普通用户账号
+      - 购物车内有至少 1 件有库存商品
+    steps:
+      - 进入购物车页
+      - 勾选 1 件商品，点击"去结算"
+      - 在订单确认页使用默认地址、默认支付方式
+      - 点击"提交订单"
+    expected:
+      - 跳转到支付页，显示订单号
+      - 订单号格式为 O + 14 位数字
+      - 订单状态为"待支付"
+    case_type: 功能测试
+    design_method: 场景法
+    tags: [smoke, regression]
+    related_req: PRD-456
+
+  - id: TC-ORDER-002
+    module: 订单创建
+    sub_module: 正常下单
+    priority: P1
+    title: 使用新收货地址下单成功
+    preconditions:
+      - 已登录，账户未绑定默认地址
+      - 购物车内有商品
+    steps:
+      - 进入结算页
+      - 点击"新增地址"，填写完整地址信息
+      - 保存并选中新地址
+      - 提交订单
+    expected:
+      - 订单创建成功
+      - 新地址被保存到地址簿
+    case_type: 功能测试
+    design_method: 场景法
+    tags: [regression]
+
+  - id: TC-ORDER-003
+    module: 订单创建
+    sub_module: 异常下单
+    priority: P1
+    title: 库存不足时下单应被拒绝
+    preconditions:
+      - 购物车商品 stock = 0
+    steps:
+      - 点击结算
+      - 提交订单
+    expected:
+      - 提示"商品库存不足"
+      - 不生成订单
+      - 不扣减库存
+    case_type: 功能测试
+    design_method: 等价类
+
+  - id: TC-ORDER-004
+    module: 订单支付
+    sub_module: 支付宝支付
+    priority: P0
+    title: 支付宝扫码支付成功后订单状态更新
+    preconditions:
+      - 存在一笔"待支付"订单
+    steps:
+      - 进入订单详情
+      - 选择"支付宝"
+      - 扫码完成支付
+    expected:
+      - 订单状态变为"已支付"
+      - 用户收到支付成功通知
+    case_type: 功能测试
+    tags: [payment, smoke]
+
+  - id: TC-ORDER-005
+    module: 订单支付
+    sub_module: 支付失败
+    priority: P2
+    title: 支付超时订单应自动取消
+    preconditions:
+      - 存在一笔"待支付"订单，创建时间 > 30 分钟
+    steps:
+      - 等待 30 分钟（或用测试开关模拟）
+      - 查看订单状态
+    expected:
+      - 订单状态变为"已取消"
+      - 库存回滚
+    case_type: 功能测试
+    design_method: 状态迁移

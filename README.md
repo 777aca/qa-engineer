@@ -18,19 +18,47 @@
 
 ```
 qa-engineer/
-├── SKILL.md                          # 入口：工作流决策树 + 核心原则
+├── SKILL.md                          # 入口：启动协议 + 工作流决策树 + 核心原则
 ├── references/                       # 按需加载，节省上下文
 │   ├── test-design.md                # 用例设计方法论（等价类/边界值/判定表/场景法/状态迁移/正交法）
 │   ├── bug-report.md                 # Bug 定位 + 规范报告模板
 │   ├── api-testing.md                # API 接口测试（后端栈无关）
 │   ├── ui-e2e-playwright.md          # UI E2E 自动化（前端栈无关）
 │   ├── performance-testing.md        # 性能压测（Locust / k6 / JMeter）
-│   └── app-testing.md                # App 测试（Appium + Flutter integration_test）
-└── scripts/                          # 可复用脚本
-    ├── new_test_case.py              # 生成标准化测试用例 Markdown
-    ├── new_bug_report.py             # 生成规范 Bug 报告骨架
-    └── api_smoke.py                  # YAML 驱动的接口批量冒烟
+│   ├── app-testing.md                # App 测试（Appium + Flutter integration_test）
+│   └── output-formats.md             # 各种产出格式（xlsx/xmind/docx/pptx）的生成方法
+├── scripts/                          # 可复用脚本
+│   ├── new_test_case.py              # 生成标准化测试用例 Markdown
+│   ├── new_bug_report.py             # 生成规范 Bug 报告骨架
+│   ├── api_smoke.py                  # YAML 驱动的接口批量冒烟
+│   ├── cases_to_xlsx.py              # 用例 YAML/JSON → 规范 Excel（可导入禅道/TestLink）
+│   └── cases_to_xmind.py             # 用例 YAML/JSON → 真正的 .xmind 文件
+└── samples/                          # 示例数据
+    └── sample_cases.yaml             # 5 条示例用例，可直接用于验证脚本
 ```
+
+## 🤝 启动协议（Skill 的使用方式）
+
+本 Skill 在触发后，**会主动询问你一份结构化清单**（而不是自作主张地开干），清单包含：
+
+1. **任务类型**（单选）：用例设计 / API 测试 / UI E2E / 性能压测 / App 自动化 / Bug 报告 / 测试计划 / 报告撰写
+2. **可用材料**（多选）：PRD / 接口文档 / URL+账号 / 截图录屏 / Bug 现象 / 代码片段 / 历史用例 / 什么都没有
+3. **产出格式**（多选）：Markdown / Excel (.xlsx) / XMind (.xmind) / XMind 大纲 / Word (.docx) / PPT (.pptx) / 自动化脚本
+
+你勾选后 Claude 再开始工作。只有在**纯咨询问题**（如"什么是边界值法"）或**你明确说了"不用问"**时才跳过。
+
+## 📋 支持的产出格式
+
+| 格式 | 用途 | 实现方式 |
+|------|-----|---------|
+| **Markdown** | 对话中直接展示、git 版本化 | 原生 |
+| **Excel (.xlsx)** | 团队评审、禅道/TestLink 导入 | `scripts/cases_to_xlsx.py`（含禅道格式） |
+| **XMind (.xmind)** | 评审演示、个人理清思路 | `scripts/cases_to_xmind.py`（双击打开） |
+| **XMind 大纲** | 零依赖，可粘贴 XMind/幕布/MindMaster | Markdown 层级 |
+| **Word (.docx)** | 正式测试方案/计划/报告 | 调用 `document-skills:docx` |
+| **PPT (.pptx)** | 团队汇报、迭代总结 | 调用 `document-skills:pptx` |
+
+详见 [`references/output-formats.md`](./references/output-formats.md)。
 
 ## 🎯 触发场景
 
@@ -72,15 +100,25 @@ python /path/to/skill-creator/scripts/package_skill.py ./qa-engineer ./dist
 仓库内的 `scripts/` 目录可独立使用：
 
 ```bash
-# 生成测试用例模板
+# 1. 生成测试用例模板
 python scripts/new_test_case.py 登录 "正确邮箱密码登录成功" --priority P0 --output tc-login-001.md
 
-# 生成 Bug 报告骨架
+# 2. 生成 Bug 报告骨架
 python scripts/new_bug_report.py "已完成订单申请退款后页面白屏" --severity S2 --priority P1 --output bug-001.md
 
-# YAML 驱动的接口冒烟
+# 3. YAML 驱动的接口冒烟
 python scripts/api_smoke.py smoke.yaml
+
+# 4. 批量用例 YAML → 规范 Excel
+python scripts/cases_to_xlsx.py samples/sample_cases.yaml -o output/订单测试用例.xlsx
+#   禅道导入格式：
+python scripts/cases_to_xlsx.py samples/sample_cases.yaml --format zentao -o output/订单_禅道.xlsx
+
+# 5. 批量用例 YAML → XMind 思维导图
+python scripts/cases_to_xmind.py samples/sample_cases.yaml -o output/订单测试用例.xmind
 ```
+
+脚本 4 和 5 使用统一的 YAML 格式（见 `samples/sample_cases.yaml`），保证相同数据源可产出多种格式。
 
 ## 📋 工作流决策树
 
@@ -114,6 +152,7 @@ python scripts/api_smoke.py smoke.yaml
 - [UI E2E 自动化](./references/ui-e2e-playwright.md) — Playwright 首选，PO 模式、选择器策略、反脆弱
 - [性能压测](./references/performance-testing.md) — Locust / k6 / JMeter 对比 + 场景建模 + 瓶颈定位
 - [App 自动化](./references/app-testing.md) — Appium 通用 + Flutter 专属方案 + 小程序/UniApp/H5 混合
+- [产出格式指南](./references/output-formats.md) — Markdown / xlsx / xmind / docx / pptx 的生成策略
 
 ## 🤝 贡献
 
