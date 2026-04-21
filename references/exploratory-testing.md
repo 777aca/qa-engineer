@@ -438,6 +438,52 @@ python scripts/bugs_to_xlsx.py discuss/bugs/bugs.yaml -o discuss/bugs/bug-report
 
 ---
 
+## 9.1 同步产出测试用例清单（必做）
+
+主动探索测试**不是只出 bug，还必须同时产出测试用例清单**。用户没有明确说"不要用例"，就都要做。
+
+### 转换规则
+
+把探索过程中**已经走过的每个检查点**固化成一条用例，不管有没有发现 bug：
+
+- 发现 bug 的点 → 用例 `expected` 写"**正确的**预期行为"（不是 bug 当前的表现），`priority` 按对应 bug 的优先级
+- 没发现 bug 的点 → 照样写一条 Pass 状态的用例，沉淀为**回归资产**
+- 一次探索扫到的 Bug Checklist（第 6 节）命中条目，逐条变成用例
+- 同一功能点 PC/Mobile 各跑了一遍 → 合成一条用例，`precondition` 里写"PC / Mobile 各验一次"
+
+### 用例数据结构
+
+```yaml
+cases:
+  - id: TC-001
+    title: 商品标题超长时列表布局保持完整
+    module: 商品列表
+    priority: P2
+    level: L3                # 对应发现档位
+    platform: mobile
+    precondition:
+      - 已登录测试账号
+      - 至少存在一个标题 > 30 字的商品
+    steps:
+      - 打开首页
+      - 滚动到标题超长的商品
+      - 窗口缩至 375px
+    expected:
+      - 标题最多占两行并溢出省略
+      - 价格完整可见不被遮挡
+    linked_bug: BUG-001      # 若该用例来源于某 bug，关联上
+```
+
+### 产出路径
+
+- YAML 源：`discuss/testing/test-cases.yaml`
+- Excel：`python scripts/cases_to_xlsx.py discuss/testing/test-cases.yaml -o discuss/testing/test-cases.xlsx`
+- XMind（可选）：`python scripts/cases_to_xmind.py discuss/testing/test-cases.yaml -o discuss/testing/test-cases.xmind`
+
+最终交付两张表：`bug-report.xlsx`（发现的问题） + `test-cases.xlsx`（可复用的回归用例）。
+
+---
+
 ## 10. 与 bug-report.md 的关系
 
 - **本文件**：**批量探索**时的发现流程和**汇总清单**格式
@@ -451,6 +497,7 @@ python scripts/bugs_to_xlsx.py discuss/bugs/bugs.yaml -o discuss/bugs/bug-report
 
 ## 11. 不做的事
 
+- **不扫代码规范 / 命名规范**：不评价代码风格、变量命名、接口路径命名（RESTful / camelCase vs snake_case / URL 复数等）、字段命名、注释完整度、文件组织。**只关心功能是否跑通、是否符合预期、是否会炸**。命名不规范但功能正确的，直接跳过
 - **不做有风险的操作**：不点"删除账号"、"注销"、"支付"类不可逆按钮，除非用户明说测试环境可以
 - **不做 DoS / 暴力探测**：不打压测、不扫 admin 路径、不跑字典爆破
 - **不绕过授权**：只测试自己有权限看的页面；未授权接口发现越权也只报告不深挖
