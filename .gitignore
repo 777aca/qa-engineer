@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 打包产物
+dist/
+build/
+*.skill
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志与运行产物
+logs/
+*.log
+
+# 测试产物
+.pytest_cache/
+.coverage
+htmlcov/
+playwright-report/
+test-results/
+allure-results/
