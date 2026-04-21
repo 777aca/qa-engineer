@@ -1,0 +1,87 @@
+project: demo-shop-frontend
+target: https://demo-shop.example.com
+mode: explore-url
+explorer: claude-qa
+scanned_at: 2026-04-21
+
+bugs:
+  - id: BUG-001
+    title: 商品标题超长时列表在 375px 下塌陷，遮挡价格
+    category: UI-02
+    module: 商品列表
+    severity: S3
+    priority: P2
+    status: 已确认
+    reproducible: 必现
+    steps:
+      - 访问首页
+      - 缩小窗口到 375px
+      - 定位到任意标题超 30 字的商品卡片
+    expected: 标题 2 行省略，价格固定可见
+    actual: 标题占满 3 行，价格被推出可视区
+    evidence:
+      - type: screenshot
+        path: discuss/bugs/assets/BUG-001/overflow-375.png
+    suggestion: 标题加 line-clamp:2，价格容器改 flex-shrink:0
+    tags: [mobile, list]
+
+  - id: BUG-002
+    title: 搜索框输入 <script>alert(1)</script> 后弹窗（疑似反射 XSS）
+    category: FORM-04
+    module: 搜索
+    severity: S1
+    priority: P0
+    status: 已确认
+    reproducible: 必现
+    steps:
+      - 打开首页
+      - 在搜索框输入 "<script>alert(1)</script>"
+      - 回车
+    expected: 转义显示为文本或过滤后显示
+    actual: 页面弹出 alert 对话框
+    evidence:
+      - type: screenshot
+        path: discuss/bugs/assets/BUG-002/xss-alert.png
+      - type: console
+        content: "<alert dialog triggered>"
+    suggestion: 搜索回显前做 HTML 转义；统一用 textContent 而非 innerHTML
+    tags: [security, xss]
+
+  - id: BUG-003
+    title: 连点提交按钮导致订单创建 3 次（未做节流）
+    category: STATE-05
+    module: 结算
+    severity: S2
+    priority: P1
+    status: 已确认
+    reproducible: 必现
+    steps:
+      - 加购商品，进入结算页
+      - 快速点击"提交订单"按钮 3 次
+    expected: 只创建 1 笔订单，按钮置灰
+    actual: 接口被调用 3 次，生成 3 笔重复订单
+    evidence:
+      - type: network
+        content: "POST /api/orders 出现 3 次，间隔 <200ms"
+    suggestion: 提交时立即 disable 按钮；后端幂等校验兜底
+    tags: [idempotency, payment]
+
+  - id: BUG-004
+    title: 401 后未跳转登录页，继续显示空数据
+    category: NET-03
+    module: 全局
+    severity: S2
+    priority: P1
+    status: 待验证
+    reproducible: 偶现
+    steps:
+      - 登录后将 localStorage 里的 token 清掉
+      - 刷新任意受保护页面
+    expected: 拦截并重定向到登录页
+    actual: 页面显示"暂无数据"，没有任何登录提示
+    evidence:
+      - type: code
+        path: src/api/client.ts:78
+        snippet: "if (res.status === 401) { return [] }"
+    suggestion: 401 拦截器里 router.push('/login') 并清 store
+    tags: [auth]
