@@ -40,3 +40,10 @@ htmlcov/
 playwright-report/
 test-results/
 allure-results/
+
+# 私密登录态与调试证据
+.auth/
+**/.auth/
+**/private-traces/
+.env
+.env.*

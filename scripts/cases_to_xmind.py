@@ -33,6 +33,7 @@ import sys
 import uuid
 import zipfile
 from typing import Any
+from data_contract import DataError, load_document, normalize_document, normalize_case
 
 
 # 优先级 → XMind 官方颜色 marker ID（XMind ZEN 2020+ 支持的内置 marker）
@@ -49,15 +50,7 @@ def _id() -> str:
 
 
 def load_cases(path: str) -> dict[str, Any]:
-    text = pathlib.Path(path).read_text(encoding="utf-8")
-    if path.endswith((".yaml", ".yml")):
-        try:
-            import yaml
-        except ImportError:
-            print("请先安装依赖：pip install pyyaml", file=sys.stderr)
-            raise
-        return yaml.safe_load(text)
-    return json.loads(text)
+    return normalize_document(load_document(path))
 
 
 def _make_node(title: str, children: list[dict] | None = None,
@@ -76,6 +69,7 @@ def _make_node(title: str, children: list[dict] | None = None,
 
 def build_case_node(case: dict[str, Any]) -> dict:
     """把单条用例转为 XMind 子树。"""
+    case = normalize_case(case)
     priority = case.get("priority", "P2")
     title = f"[{priority}] {case.get('title', case.get('id', 'unnamed'))}"
 
@@ -89,6 +83,13 @@ def build_case_node(case: dict[str, Any]) -> dict:
         meta_items.append(_make_node(f"需求：{case['related_req']}"))
     if case.get("design_method"):
         meta_items.append(_make_node(f"设计方法：{case['design_method']}"))
+    for key, label in (("level", "档位"), ("platform", "平台"), ("linked_bug", "关联 Bug"),
+                       ("result", "结果"), ("actual", "实际结果"), ("evidence", "证据")):
+        if case.get(key):
+            value = case[key]
+            if isinstance(value, list):
+                value = json.dumps(value, ensure_ascii=False)
+            meta_items.append(_make_node(f"{label}：{value}"))
     if meta_items:
         children.append(_make_node("基本信息", meta_items))
 
@@ -146,6 +147,7 @@ def group_by(items: list[dict], key: str) -> dict[str, list[dict]]:
 
 def build_content(data: dict[str, Any]) -> list[dict]:
     """构建 XMind content.json 的顶层结构。"""
+    data = normalize_document(data)
     project = data.get("project", "测试用例")
     version = data.get("version", "")
     root_title = f"{project} {version}".strip()
@@ -220,7 +222,11 @@ def main() -> int:
                         help="输出 .xmind 路径；默认 <project>.xmind")
     args = parser.parse_args()
 
-    data = load_cases(args.input)
+    try:
+        data = load_cases(args.input)
+    except (DataError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     if args.output:
         out_path = pathlib.Path(args.output)

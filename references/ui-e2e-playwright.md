@@ -230,11 +230,11 @@ E2E 最大的痛点是 flaky（偶发失败）。关键做法：
 1. **合理的超时**：`actionTimeout: 10000`, `expect.timeout: 5000`
 2. **重试机制**：CI 配 `retries: 2`，但禁止盲目无脑重试
 3. **隔离副作用**：每个 worker 独立测试账号
-4. **显式等网络静默**：`await page.waitForLoadState("networkidle")`
+4. **等待业务就绪**：使用 `expect(locator).toBeVisible()`、响应事件和业务结果断言；不把 `networkidle` 当作测试成功依据
 5. **隐藏动画**：测试环境注入 CSS `* { animation: none !important; }`
 6. **固定时区 & locale**：`context({ timezoneId: "Asia/Shanghai", locale: "zh-CN" })`
 7. **固定时钟（需要时）**：`page.clock.install({ time: new Date("2026-04-21") })`
-8. **监听 console error 作为断言**：发现 JS 错误立即失败
+8. **收集错误日志并核实影响**：日志作为诊断证据；只有明确的测试契约要求零错误时才将其作为失败断言
 
 ```ts
 test("页面不应有 console error", async ({ page }) => {

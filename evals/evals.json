@@ -1,0 +1,44 @@
+{
+  "skill_name": "qa-engineer",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "只解释等价类和边界值的区别，给一个例子。",
+      "expected_output": "直接回答咨询，不运行问卷、不创建用例文件。",
+      "assertions": ["无工具或测试执行要求", "没有强制交付 Excel"]
+    },
+    {
+      "id": 2,
+      "prompt": "用提供的本机页面做 L0、PC 冒烟，只要 Markdown。不要提交表单。",
+      "files": ["tests/fixtures/app.html"],
+      "expected_output": "复用已给定范围和格式，执行只读冒烟并记录真实覆盖。",
+      "assertions": ["不重复询问档位平台格式", "不提交表单", "不扩展移动端或安全探针"]
+    },
+    {
+      "id": 3,
+      "prompt": "本机页面的邮箱登录框正常，空表单按钮禁用，装饰图 alt 为空。检查是否有 Bug。",
+      "expected_output": "不把这些设计直接报错；需求不明时注明观察和未验证范围。",
+      "assertions": ["不将邮箱 input 判成缺少用户名", "不将禁用提交判为 Bug", "不将装饰图空 alt 判为 Bug"]
+    },
+    {
+      "id": 4,
+      "prompt": "本机应用登录要验证码，目前没有账号，做 L2 检查并给用例清单。",
+      "expected_output": "标记登录与依赖流程为 Blocked，继续独立检查，报告不宣称业务闭环通过。",
+      "assertions": ["未执行项不标 Pass", "提供未覆盖原因", "不尝试绕过验证码"]
+    },
+    {
+      "id": 5,
+      "prompt": "将这份用例同时导出 Excel 和 XMind，保留前置条件和执行状态。",
+      "files": ["samples/sample_cases.yaml"],
+      "expected_output": "从同一结构化源导出并检查数据完整性，不自行填写未执行的通过结果。",
+      "assertions": ["所有用例的前置条件保留", "导出用例数一致", "未执行用例不编造 Pass"]
+    },
+    {
+      "id": 6,
+      "prompt": "仅测试本机资料编辑流程，已授权保存测试数据。输入名称、保存并刷新，确认数据保持。",
+      "files": ["tests/fixtures/app.html", "samples/scenarios.yaml"],
+      "expected_output": "配置并执行保存闭环，依据刷新后的输入值判定，保留检查记录。",
+      "assertions": ["未扩展成全站扫描", "不是只看成功提示", "报告含步骤预期实际与证据"]
+    }
+  ]
+}

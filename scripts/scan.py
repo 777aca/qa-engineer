@@ -1,126 +1,135 @@
-"""通用 Web 探索扫描入口 —— 支持按档位（L0–L4）+ 平台（pc/mobile/both）触发。
+"""按档位与平台执行页面检查和声明式业务场景，并导出实际覆盖记录。
 
-用法：
-    python scripts/scan.py --url <URL> [--level L0|L1|L2|L3|L4] [--platform pc|mobile|both]
-                           [--out-dir samples/out/<name>]
-
-示例：
-    # 最快：L0 冒烟
-    python scripts/scan.py --url https://example.com --level L0
-
-    # 默认：L2 闭环 + PC
-    python scripts/scan.py --url https://example.com
-
-    # 移动端 + 精细
-    python scripts/scan.py --url https://m.example.com --level L3 --platform mobile
-
-    # 两个平台都跑一遍（各产出一份 findings.json）
-    python scripts/scan.py --url https://example.com --level L2 --platform both
-
-产出：
-    <out-dir>/<platform>/findings.json  —— bug 候选
-    <out-dir>/<platform>/*.png          —— 截图证据
-    <out-dir>/<platform>/network_log.json, console_log.json, page_errors.json, dom_info.json
-    <out-dir>/bugs.yaml                 —— 合并后的 Bug 汇总（可喂 bugs_to_xlsx.py）
+退出码：0=已执行检查通过；1=存在失败或待复核项；2=输入/环境错误、阻塞或未执行。
+仅运行内置规则不能证明完成业务闭环；L1+ 需要 --config 中的业务场景。
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import json
-import pathlib
+from dataclasses import asdict
+from pathlib import Path
 import sys
 
-from playwright.sync_api import sync_playwright
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    print("缺少 Playwright，请安装 requirements.txt 和 Chromium 浏览器。", file=sys.stderr)
+    raise SystemExit(2)
 
-from scan_lib.common import (
-    ScanContext, attach_listeners, dump_context, viewport_for, MOBILE_UA,
-)
+from data_contract import DataError
+from scan_lib.common import CheckResult, CheckSpec, Outcome, write_json
+from scan_lib.redaction import Redactor
 from scan_lib.registry import checks_for_level
+from scan_lib.runner import RunOptions, RunReport, execute_checks
+from scan_lib.scenarios import load_scenarios
 
 
-def run_single(url: str, level: str, platform: str, out_dir: pathlib.Path) -> list[dict]:
+def run_single(url: str, level: str, platform: str, out_dir: Path,
+               options: RunOptions | None = None, scenarios: list[CheckSpec] | None = None,
+               redactor: Redactor | None = None) -> RunReport:
+    options = options or RunOptions()
+    redactor = redactor or Redactor()
     out_dir.mkdir(parents=True, exist_ok=True)
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        kwargs = {"ignore_https_errors": True, "viewport": viewport_for(platform)}
-        if platform == "mobile":
-            kwargs.update({
-                "user_agent": MOBILE_UA,
-                "is_mobile": True,
-                "has_touch": True,
-                "device_scale_factor": 2,
-            })
-        ctx_b = browser.new_context(**kwargs)
-        page = ctx_b.new_page()
-        ctx = ScanContext(
-            url=url, level=level, platform=platform,
-            out_dir=out_dir, page=page, browser_context=ctx_b,
-        )
-        attach_listeners(ctx)
-
-        for fn in checks_for_level(level):
-            name = getattr(fn, "__name__", "<check>")
-            try:
-                fn(ctx)
-            except Exception as e:
-                print(f"[WARN] {name} 抛异常：{type(e).__name__}: {e}", file=sys.stderr)
-
-        dump_context(ctx)
-        browser.close()
-        return [f.__dict__ for f in ctx.findings]
-
-
-def write_bugs_yaml(all_bugs: list[dict], url: str, level: str, platform: str, path: pathlib.Path):
-    data = {
-        "project": f"explore-{url.split('//')[-1].split('/')[0]}",
-        "target": url,
-        "mode": "explore-url",
-        "level": level,
-        "platform": platform,
-        "explorer": "claude-qa",
-        "scanned_at": dt.date.today().isoformat(),
-        "bugs": all_bugs,
-    }
+    specs = list(checks_for_level(level)) + list(scenarios or [])
+    if level != "L0" and not scenarios:
+        specs.append(CheckSpec("business-coverage", "业务主流程覆盖", "L1",
+                               lambda ctx: Outcome("Blocked", "未配置业务场景，不能声称完成主流程或闭环")))
     try:
-        import yaml
-        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    except ImportError:
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            try:
+                report = execute_checks(browser, url, platform, out_dir, specs, options, redactor)
+            finally:
+                browser.close()
+    except Exception as exc:
+        report = RunReport(checks=[CheckResult(
+            id=f"environment-{platform}", title="浏览器启动或运行环境", module="环境",
+            level=level, platform=platform, result="Error",
+            actual=f"{type(exc).__name__}: {redactor.text(str(exc))}",
+            steps=["启动浏览器"], expected=["浏览器可以正常执行检查"],
+        )])
+    write_json(out_dir / "findings.json", [asdict(item) for item in report.findings], redactor)
+    write_json(out_dir / "checks.json", [asdict(item) for item in report.checks], redactor)
+    write_json(out_dir / "summary.json", report.summary(), redactor)
+    return report
+
+
+def export_report(report: RunReport, url: str, level: str, platform: str,
+                  root: Path, redactor: Redactor) -> None:
+    import yaml
+    from cases_to_xlsx import build_workbook as cases_workbook
+    from bugs_to_xlsx import build_workbook as bugs_workbook
+
+    metadata = {"schema_version": 1, "project": "Web 探索测试", "target": redactor.text(url), "mode": "explore-url",
+                "level": level, "platform": platform, "explorer": "qa-engineer",
+                "scanned_at": dt.datetime.now().astimezone().isoformat()}
+    bugs = redactor.clean({**metadata, "bugs": [asdict(item) for item in report.findings]})
+    cases = redactor.clean({**metadata, "cases": [asdict(item) for item in report.checks]})
+    write_json(root / "summary.json", report.summary(), redactor)
+    for name, data in (("bugs", bugs), ("test-cases", cases)):
+        write_json(root / f"{name}.json", data, redactor)
+        (root / f"{name}.yaml").write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    cases_workbook(cases, "standard").save(root / "test-cases.xlsx")
+    bugs_workbook(bugs).save(root / "bug-report.xlsx")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Web 探索扫描（按档位 + 平台）")
+    parser = argparse.ArgumentParser(description="Web 检查与业务场景执行；默认 L2 / PC")
     parser.add_argument("--url", required=True)
     parser.add_argument("--level", default="L2", choices=["L0", "L1", "L2", "L3", "L4"])
     parser.add_argument("--platform", default="pc", choices=["pc", "mobile", "both"])
-    parser.add_argument("--out-dir", default=None,
-                        help="输出根目录，默认 samples/out/scan-<时间戳>")
+    parser.add_argument("--out-dir", help="默认 samples/out/scan-<时间戳>")
+    parser.add_argument("--config", help="声明式业务场景 YAML/JSON")
+    parser.add_argument("--storage-state", help="本地登录态文件；每项检查独立加载")
+    parser.add_argument("--allow-submit", action="store_true", help="在已授权范围执行交互和非只读请求")
+    parser.add_argument("--allow-security-tests", action="store_true", help="在已授权范围执行主动安全探针")
+    parser.add_argument("--trace", action="store_true", help="保存失败 Trace（含原始 DOM/网络数据，仅本地保管）")
+    parser.add_argument("--ignore-https-errors", action="store_true", help="显式允许测试环境无效证书")
+    parser.add_argument("--timeout-ms", type=int, default=10000)
     args = parser.parse_args()
-
-    out_root = pathlib.Path(
-        args.out_dir
-        or f"samples/out/scan-{dt.datetime.now():%Y%m%d-%H%M%S}"
-    ).resolve()
-    out_root.mkdir(parents=True, exist_ok=True)
-
-    platforms = ["pc", "mobile"] if args.platform == "both" else [args.platform]
-    all_bugs: list[dict] = []
-
-    for plat in platforms:
-        print(f"\n=== 跑 {args.level} / {plat} ===")
-        bugs = run_single(args.url, args.level, plat, out_root / plat)
-        all_bugs.extend(bugs)
-        print(f"  本轮发现 {len(bugs)} 条")
-
-    bugs_yaml = out_root / "bugs.yaml"
-    write_bugs_yaml(all_bugs, args.url, args.level, args.platform, bugs_yaml)
-    print(f"\n===== 扫描完成 =====")
-    print(f"档位：{args.level}    平台：{args.platform}    共发现 {len(all_bugs)} 条")
-    print(f"输出根目录：{out_root}")
-    print(f"Bug 清单：{bugs_yaml}")
-    print(f"生成 Excel：python scripts/bugs_to_xlsx.py {bugs_yaml}")
-    return 0
+    redactor = Redactor([os.environ.get(name, "") for name in ("TEST_USER", "TEST_PASS")])
+    try:
+        if not 1 <= args.timeout_ms <= 120000:
+            raise DataError("--timeout-ms 必须介于 1 和 120000")
+        config = load_scenarios(args.config, args.url, args.level)
+        for name in config.secret_envs:
+            redactor.remember(os.environ.get(name, ""))
+        if args.storage_state and not Path(args.storage_state).is_file():
+            raise DataError("--storage-state 文件不存在")
+        if args.storage_state:
+            try:
+                state = json.loads(Path(args.storage_state).read_text(encoding="utf-8-sig"))
+                for cookie in state.get("cookies", []):
+                    redactor.remember(cookie["value"])
+                for entry in state.get("origins", []):
+                    for item in entry.get("localStorage", []):
+                        redactor.remember(item["value"])
+            except (ValueError, TypeError, AttributeError, KeyError):
+                raise DataError("--storage-state 不是合法的浏览器登录态文件") from None
+        options = RunOptions(
+            allow_submit=args.allow_submit, allow_security_tests=args.allow_security_tests,
+            storage_state=args.storage_state, ready_selector=config.ready_selector,
+            trace=args.trace, ignore_https_errors=args.ignore_https_errors,
+            timeout_ms=args.timeout_ms, allowed_origins=config.allowed_origins,
+        )
+        root = Path(args.out_dir or f"samples/out/scan-{dt.datetime.now():%Y%m%d-%H%M%S-%f}").resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        combined = RunReport()
+        for platform in (["pc", "mobile"] if args.platform == "both" else [args.platform]):
+            report = run_single(args.url, args.level, platform, root / platform, options, config.checks, redactor)
+            combined.checks.extend(report.checks)
+            combined.findings.extend(report.findings)
+            print(f"{platform}: {report.summary()}")
+        export_report(combined, args.url, args.level, args.platform, root, redactor)
+        print(f"输出：{root}")
+        print("请结合 summary.json 中的状态与覆盖记录判断结果，零条缺陷不等于全部通过。")
+        return combined.exit_code()
+    except (DataError, OSError, ImportError) as exc:
+        print(f"执行未完成：{redactor.text(str(exc))}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

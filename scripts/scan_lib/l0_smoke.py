@@ -1,116 +1,43 @@
-"""L0 冒烟：只回答'环境能不能测'。零交互。"""
+"""L0：验证实际加载结果；启发式发现保留为待验证。"""
 from __future__ import annotations
 
-from .common import ScanContext
+from .common import CheckSpec, Outcome, ScanContext
 
 
-def _scan_dom(ctx: ScanContext):
-    page = ctx.page
-    ctx.dom_info = {
-        "title": page.title(),
-        "url": page.url,
-        "inputs": [
-            {
-                "type": el.get_attribute("type"),
-                "placeholder": el.get_attribute("placeholder"),
-                "name": el.get_attribute("name"),
-                "aria_label": el.get_attribute("aria-label"),
-                "maxlength": el.get_attribute("maxlength"),
-                "autocomplete": el.get_attribute("autocomplete"),
-            }
-            for el in page.locator("input").all()
-        ],
-        "buttons": [
-            {"text": (el.text_content() or "").strip(),
-             "aria_label": el.get_attribute("aria-label")}
-            for el in page.locator("button").all()
-        ],
-        "images_without_alt": page.evaluate(
-            "Array.from(document.querySelectorAll('img')).filter(i=>!i.alt).map(i=>i.src)"
-        ),
-        "labels_count": page.locator("label").count(),
-        "has_form_tag": page.locator("form").count() > 0,
-        "html_len": len(page.content()),
-    }
+def check_page_loads(ctx: ScanContext) -> Outcome:
+    ctx.shot("initial")
+    if not ctx.dom_info.get("title"):
+        ctx.record(id="BUG-NOTITLE", title="页面标题为空", category="UI-01", module="首屏",
+                   severity="S3", priority="P2", actual="document.title 为空",
+                   evidence=[{"type": "dom", "content": "document.title 为空"}])
+        return Outcome("NeedsReview", "页面可访问，但标题为空，需要核实产品要求")
+    return Outcome("Pass", "文档加载成功，页面主体可见；不据 HTML 长度推断白屏")
 
 
-def check_page_loads(ctx: ScanContext):
-    """页面能打开、无白屏、无 pageerror。"""
-    ctx.goto()
-    _scan_dom(ctx)
-    ctx.shot("L0_initial")
-
-    if not ctx.dom_info["title"]:
-        ctx.record(
-            id="BUG-L0-NOTITLE", title="页面 <title> 为空",
-            category="UI-01", module="首屏",
-            severity="S3", priority="P2",
-            steps=[f"打开 {ctx.url}"],
-            expected="<title> 有有意义的描述",
-            actual="title 空",
-        )
-
-    if ctx.dom_info["html_len"] < 500:
-        ctx.record(
-            id="BUG-L0-WHITE", title="首屏 HTML 过短（疑似白屏）",
-            category="UI-01", module="首屏",
-            severity="S1", priority="P0",
-            steps=[f"打开 {ctx.url}"],
-            expected="首屏内容完整渲染",
-            actual=f"document.documentElement.outerHTML 长度 = {ctx.dom_info['html_len']}",
-            evidence=[{"type": "screenshot", "path": ctx.shot("L0_white_suspicion")}],
-            suggestion="查看 JS 是否报错；检查核心 bundle 是否 404",
-        )
+def check_no_page_errors(ctx: ScanContext) -> Outcome:
+    errors = ctx.page_errors + [str(item["text"]) for item in ctx.console_log if item["type"] == "error"]
+    if errors:
+        ctx.record(id="BUG-CONSOLE", title="页面出现异常或错误日志", category="UI-01", module="首屏",
+                   severity="S2", priority="P1", actual="\n".join(errors[:5]),
+                   evidence=[{"type": "console", "content": error} for error in errors[:5]])
+        return Outcome("NeedsReview", "捕获到错误日志，需结合实际功能确认影响")
+    return Outcome("Pass", "页面就绪检查点未捕获错误日志；不代表后续交互无异常")
 
 
-def check_no_page_errors(ctx: ScanContext):
-    """pageerror / console.error 零容忍。"""
-    if ctx.page_errors:
-        ctx.record(
-            id="BUG-L0-PAGEERR",
-            title=f"首屏抛出 {len(ctx.page_errors)} 个未捕获异常",
-            category="UI-01", module="首屏",
-            severity="S1", priority="P0",
-            steps=[f"打开 {ctx.url}", "观察 DevTools Console"],
-            expected="无 pageerror",
-            actual="\n".join(ctx.page_errors[:5]),
-            evidence=[{"type": "console", "content": e} for e in ctx.page_errors[:3]],
-            suggestion="按首个错误栈反推组件，先修",
-        )
-    err_console = [c for c in ctx.console_log if c.get("type") == "error"]
-    if err_console:
-        ctx.record(
-            id="BUG-L0-CONSOLE-ERR",
-            title=f"首屏产生 {len(err_console)} 条 console.error",
-            category="UI-01", module="首屏",
-            severity="S2", priority="P1",
-            steps=[f"打开 {ctx.url}", "观察 Console"],
-            expected="无 error 级别日志",
-            actual="\n".join(c["text"] for c in err_console[:5]),
-            status="待验证",
-        )
-
-
-def check_core_resources(ctx: ScanContext):
-    """首屏加载的 JS/CSS/图片有无 4xx/5xx。"""
-    bad = [
-        e for e in ctx.network_log
-        if (e["status"] >= 400 or e["status"] == -1)
-        and ("/assets/" in e["url"] or e["url"].endswith((".js", ".css", ".png", ".svg", ".jpg", ".woff2")))
-    ]
+def check_core_resources(ctx: ScanContext) -> Outcome:
+    bad = [item for item in ctx.network_log
+           if (item["status"] == -1 or item["status"] >= 400)
+           and item["resource_type"] in ("script", "stylesheet", "image", "font")]
     if bad:
-        ctx.record(
-            id="BUG-L0-RES-FAIL",
-            title=f"{len(bad)} 个核心静态资源加载失败",
-            category="NET-01", module="首屏",
-            severity="S1", priority="P0",
-            steps=[f"打开 {ctx.url}", "观察 Network 面板"],
-            expected="核心资源全部 2xx",
-            actual="\n".join(f"{e['status']} {e['url']}" for e in bad[:5]),
-            suggestion="检查 CDN/部署；可能是构建 hash 对不上",
-        )
+        ctx.record(id="BUG-RESOURCE", title="页面资源加载失败", category="NET-01", module="首屏",
+                   severity="S2", priority="P1", actual=f"失败资源数：{len(bad)}",
+                   evidence=[{"type": "network", "content": str(item)} for item in bad[:5]])
+        return Outcome("NeedsReview", "存在失败资源，是否影响核心功能需复核")
+    return Outcome("Pass", "观察窗口内未发现失败的脚本、样式、图片或字体请求")
 
 
-# ---- 档位注册 ----
-
-CHECKS = [check_page_loads, check_no_page_errors, check_core_resources]
+CHECKS = [
+    CheckSpec("page-load", "首屏可访问", "L0", check_page_loads, expected=["文档加载成功且主体可见"]),
+    CheckSpec("page-errors", "首屏错误日志", "L0", check_no_page_errors, expected=["就绪检查点无未处理错误"]),
+    CheckSpec("resources", "首屏资源请求", "L0", check_core_resources, expected=["观察窗口内资源正常加载"]),
+]

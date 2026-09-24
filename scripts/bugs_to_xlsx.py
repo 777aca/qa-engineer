@@ -19,6 +19,7 @@ import json
 import pathlib
 import sys
 from typing import Any
+from data_contract import DataError, load_document, normalize_document, sheet_title, literal_cells
 
 
 try:
@@ -80,11 +81,7 @@ STATUS_FILL = {
 
 
 def load_bugs(path: str) -> dict[str, Any]:
-    text = pathlib.Path(path).read_text(encoding="utf-8")
-    if path.endswith((".yaml", ".yml")):
-        import yaml
-        return yaml.safe_load(text)
-    return json.loads(text)
+    return normalize_document(load_document(path), "bugs")
 
 
 def _flatten_numbered(value: Any) -> str:
@@ -121,10 +118,11 @@ def _flatten_evidence(value: Any) -> str:
 
 
 def build_workbook(data: dict[str, Any]) -> Workbook:
+    data = normalize_document(data, "bugs")
     wb = Workbook()
     ws = wb.active
     project = data.get("project", "Bug 汇总")
-    ws.title = project[:30]
+    ws.title = sheet_title(project, "Bug 汇总")
 
     # 表头
     for col_idx, (key, header, width) in enumerate(COLUMNS, start=1):
@@ -169,7 +167,7 @@ def build_workbook(data: dict[str, Any]) -> Workbook:
             ("severity", '"S1,S2,S3,S4"'),
             ("priority", '"P0,P1,P2,P3"'),
             ("status", '"已确认,待验证"'),
-            ("reproducible", '"必现,偶现,一次"'),
+            ("reproducible", '"必现,偶现,一次,未复现"'),
             ("level", '"L0,L1,L2,L3,L4"'),
             ("platform", '"pc,mobile,both"'),
         ]:
@@ -205,6 +203,7 @@ def build_workbook(data: dict[str, Any]) -> Workbook:
             else:
                 ws.cell(row=meta_row + i, column=2, value=str(data.get(val_key, "")))
 
+    literal_cells(wb)
     return wb
 
 
@@ -214,8 +213,12 @@ def main() -> int:
     parser.add_argument("-o", "--output", default=None, help="输出 .xlsx；默认 <project>-bugs.xlsx")
     args = parser.parse_args()
 
-    data = load_bugs(args.input)
-    wb = build_workbook(data)
+    try:
+        data = load_bugs(args.input)
+        wb = build_workbook(data)
+    except (DataError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     if args.output:
         out_path = pathlib.Path(args.output)

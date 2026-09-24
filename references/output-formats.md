@@ -74,7 +74,15 @@ cases:
 `id`, `module`, `priority`, `title`, `steps`, `expected`
 
 ### 可选字段
-其他都是增强信息，生成不同格式时按需使用。
+执行记录可增加 `result`、`actual`、`executor`、`level`、`platform`、`linked_bug`、`evidence`、`duration_ms`。
+
+- `preconditions` 是统一的前置条件字段；旧 `precondition` 自动转换，两个字段冲突时报错。
+- `result`：Pass / Fail / Skipped / Blocked / Error / NeedsReview / N/A；未执行的设计用例可不填，不能默认 Pass。
+- `level`：L0–L4；`platform`：pc / mobile / both。实际 PC/Mobile 执行记录分别保存，不能合并成一个模糊的通过状态。
+- `linked_bug` 为 Bug ID 或 ID 列表；`evidence` 为包含 type 与 path/content/snippet 的对象列表。
+- 标准 Excel 与 XMind 保留前置条件、档位、平台、关联 Bug、结果、实际与证据；禅道格式保留既有九列以兼容导入。
+- 导出前校验必填字段、枚举、重复 ID、证据结构及未知字段；格式错误直接报错，不静默丢弃。
+- 输入文本以文本单元格保存，测试数据中的 `=` 不作为公式执行。
 
 ### Claude 的工作方式
 1. 先和用户沟通清楚需求
@@ -129,7 +137,7 @@ python scripts/cases_to_xlsx.py cases.yaml -o output/订单测试用例.xlsx
 ```
 
 产出结构：
-| ID | 模块 | 子模块 | 优先级 | 用例标题 | 前置条件 | 步骤 | 预期结果 | 用例类型 | 设计方法 | Tags | 关联需求 | 实际结果 | 执行人 | 结果 |
+| ID | 模块 | 子模块 | 优先级 | 用例标题 | 前置条件 | 步骤 | 预期结果 | 用例类型 | 设计方法 | Tags | 关联需求 | 实际结果 | 执行人 | 结果 | 档位 | 平台 | 关联 Bug | 证据 |
 |----|------|-------|-------|---------|---------|-----|---------|---------|---------|------|---------|---------|-------|------|
 
 **特性**：
@@ -140,8 +148,8 @@ python scripts/cases_to_xlsx.py cases.yaml -o output/订单测试用例.xlsx
 - "结果"列 Pass=绿色、Fail=红色条件格式
 - 步骤和预期用换行区分多项（而非合并成一段）
 
-### 备选方案：调用 `document-skills:xlsx`
-当需求不是标准用例表（例如"给我一个测试进度跟踪表"、"Bug 统计表"等），直接调用 `document-skills:xlsx` skill，它能处理任意 Excel 需求。
+### 备选方案：使用宿主的表格工具
+当需求不是标准用例表时，使用实际已安装的表格能力；先探测是否可用，不依赖固定 Skill 名称。
 
 ### 导入禅道 / TestLink 格式
 - **禅道**：用脚本加参数 `--format zentao`，会按禅道官方模板排列列顺序
@@ -223,8 +231,8 @@ python scripts/cases_to_xmind.py cases.yaml -o output/订单测试用例.xmind
 
 用于**正式文档**（测试方案、测试计划、测试报告、验收报告）。
 
-### 优先方案：调用 `document-skills:docx`
-测试方案/计划/报告是 `document-skills:docx` 的典型用例。触发时直接调用该 skill，给它下面这些素材：
+### 优先方案：使用宿主的文档工具
+使用实际已安装的 Word 文档能力，提供下面这些素材；没有对应工具时按依赖表处理：
 - 标题、版本、作者、日期
 - 章节结构（用 `references/test-design.md` §11 的测试计划模板为骨架）
 - 具体内容
@@ -242,7 +250,7 @@ python scripts/cases_to_xmind.py cases.yaml -o output/订单测试用例.xmind
 
 用于**团队汇报、迭代结束总结、验收评审**。
 
-### 优先方案：调用 `document-skills:pptx`
+### 优先方案：使用宿主实际安装的演示文稿工具
 
 ### 推荐的标准幻灯结构
 
@@ -290,10 +298,10 @@ python scripts/cases_to_xmind.py cases.yaml -o output/订单测试用例.xmind
 | 格式 | 依赖 | 回退方案 |
 |-----|------|---------|
 | Markdown | 无 | — |
-| xlsx | `openpyxl` 或 `document-skills:xlsx` | Markdown 表格 |
+| xlsx | `openpyxl` 或宿主表格工具 | Markdown 表格 |
 | xmind | `xmind-sdk`（或手搓 zip） | XMind 大纲（Markdown） |
-| docx | `document-skills:docx` 或 `python-docx` | Markdown |
-| pptx | `document-skills:pptx` 或 `python-pptx` | Markdown 大纲 |
+| docx | 宿主文档工具或 `python-docx` | Markdown |
+| pptx | 宿主演示文稿工具或 `python-pptx` | Markdown 大纲 |
 
 依赖不可用时：
 1. 告知用户具体缺什么包

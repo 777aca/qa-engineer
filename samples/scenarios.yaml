@@ -1,0 +1,34 @@
+schema_version: 1
+ready_selector: body
+scenarios:
+  - id: search
+    title: 搜索后显示匹配商品
+    module: 商品搜索
+    level: L1
+    steps:
+      - action: fill
+        target: {label: 搜索}
+        value: 茶杯
+      - action: click
+        target: {role: button, name: 搜索}
+      - action: expect_text
+        target: {test_id: search-result}
+        value: 茶杯
+  - id: save-and-reload
+    title: 保存名称后刷新仍保留
+    module: 编辑资料
+    level: L2
+    preconditions: [已获授权修改此测试资料]
+    steps:
+      - action: fill
+        target: {label: 名称}
+        value: 测试名称
+      - action: click
+        target: {role: button, name: 保存}
+      - action: expect_text
+        target: {test_id: save-status}
+        value: 已保存
+      - action: reload
+      - action: expect_value
+        target: {label: 名称}
+        value: 测试名称

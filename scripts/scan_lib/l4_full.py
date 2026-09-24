@@ -1,137 +1,73 @@
-"""L4 全面：L3 + 安全黑盒 + a11y 深度 + 网络专项。"""
+"""L4：有明确边界的安全与可访问性检查，不宣称完整审计。"""
 from __future__ import annotations
 
-import json
 import re
-from .common import ScanContext
-
-LOGIN_BTN_RE = re.compile(r"登\s*录|登\s*陆|登\s*入|login|sign\s*in", re.I)
-
-
-def _looks_like_login(ctx: ScanContext) -> bool:
-    return any((i.get("type") == "password") for i in ctx.dom_info.get("inputs", []))
+from .common import CheckSpec, Outcome, ScanContext
+from .login import fields
+from .redaction import SENSITIVE
 
 
-def check_xss(ctx: ScanContext):
-    if not _looks_like_login(ctx):
-        return
-    ctx.goto()
-    page = ctx.page
-    payload = "<script>window.__xss_hit__=1</script>"
-    inputs = page.locator("input").all()
-    if len(inputs) >= 2:
-        inputs[0].fill(payload)
-        inputs[1].fill(payload)
-    if len(inputs) >= 3:
-        inputs[2].fill("test")
-    try:
-        page.get_by_role("button", name=LOGIN_BTN_RE).first.click(timeout=2000)
-        page.wait_for_timeout(1500)
-    except Exception:
-        pass
-    hit = page.evaluate("window.__xss_hit__ || null")
-    if hit:
-        ctx.record(
-            id="BUG-L4-XSS",
-            title="用户名/密码字段反射 XSS（payload 被执行）",
-            category="FORM-04", module="登录",
-            severity="S1", priority="P0",
-            steps=["在用户名填 <script>window.__xss_hit__=1</script>", "提交"],
-            expected="输入被转义或过滤，脚本不执行",
-            actual=f"window.__xss_hit__ = {hit}",
-            evidence=[{"type": "screenshot", "path": ctx.shot("L4_xss")}],
-            suggestion="前端 textContent 回显；后端回显接口 HTML 转义",
-            tags=["security", "xss"],
-        )
+def check_xss(ctx: ScanContext) -> Outcome:
+    form = fields(ctx)
+    if form is None:
+        return Outcome("Skipped", "当前页面不适用密码登录输入探针")
+    ctx.page.evaluate("window.__qa_xss_hit__ = false")
+    form[0].fill("<script>window.__qa_xss_hit__=true</script>")
+    form[1].fill("qa-test-password")
+    form[2].click()
+    if ctx.page.evaluate("window.__qa_xss_hit__ === true"):
+        ctx.record(id="BUG-XSS", title="输入探针在页面中执行", category="SEC-01", module="安全",
+                   severity="S1", priority="P0", status="已确认",
+                   actual="观察到本次探针的执行标记",
+                   evidence=[{"type": "runtime", "content": "window.__qa_xss_hit__ === true"}])
+        return Outcome("Fail", "已观察到本次脚本探针执行")
+    return Outcome("NeedsReview", "当前检查点未观察到探针执行；单一输入不能证明无 XSS")
 
 
-def check_cookie_flags(ctx: ScanContext):
-    ctx.goto()
-    ctx.page.wait_for_timeout(600)
+def check_cookie_flags(ctx: ScanContext) -> Outcome:
     cookies = ctx.browser_context.cookies()
-    bad = [
-        c for c in cookies
-        if c.get("httpOnly") is False or c.get("secure") is False
-    ]
-    if cookies and bad:
-        ctx.record(
-            id="BUG-L4-COOKIE-FLAGS",
-            title=f"{len(bad)}/{len(cookies)} 个 cookie 缺 HttpOnly/Secure",
-            category="SEC-02", module="安全",
-            severity="S2", priority="P1",
-            steps=["打开页面", "查看 Cookies"],
-            expected="会话 cookie 应带 HttpOnly + Secure + SameSite",
-            actual=json.dumps(
-                [{"name": c["name"], "httpOnly": c["httpOnly"], "secure": c["secure"]}
-                 for c in bad],
-                ensure_ascii=False,
-            ),
-            suggestion="Set-Cookie: xxx; HttpOnly; Secure; SameSite=Lax",
-            tags=["security", "cookie"],
-        )
+    session = [cookie for cookie in cookies if re.search(r"session|auth|token|sid", cookie["name"], re.I)]
+    bad = [{"name": cookie["name"], "httpOnly": cookie["httpOnly"], "secure": cookie["secure"]}
+           for cookie in session if not cookie["httpOnly"] or not cookie["secure"]]
+    if bad:
+        ctx.record(id="BUG-COOKIE", title="疑似会话 Cookie 的保护属性需核实", category="SEC-02", module="安全",
+                   severity="S2", priority="P1", actual=f"候选数量：{len(bad)}",
+                   evidence=[{"type": "cookie_attributes", "content": str(bad)}])
+        return Outcome("NeedsReview", "按名称识别的会话 Cookie 缺少保护属性，需核实用途和环境")
+    return Outcome("Pass" if session else "Skipped",
+                   "已识别的会话 Cookie 具备 HttpOnly/Secure" if session else "未识别到会话 Cookie")
 
 
-def check_a11y(ctx: ScanContext):
-    dom = ctx.dom_info
-    inputs = dom.get("inputs", [])
-    if not inputs:
-        return
-    missing = [i for i in inputs if not i.get("aria_label") and not i.get("name")]
-    if dom.get("labels_count", 0) == 0 and missing:
-        ctx.record(
-            id="BUG-L4-A11Y-LABEL",
-            title=f"{len(missing)} 个 input 既无 <label> 也无 aria-label",
-            category="A11Y-02", module="可访问性",
-            severity="S3", priority="P2",
-            steps=["屏幕阅读器读页面"],
-            expected="每个 input 配 <label> 或 aria-label",
-            actual="只有 placeholder",
-            tags=["a11y"],
-        )
-    imgs = dom.get("images_without_alt", [])
-    if imgs:
-        ctx.record(
-            id="BUG-L4-A11Y-ALT",
-            title=f"{len(imgs)} 张 <img> 缺 alt",
-            category="A11Y-01", module="可访问性",
-            severity="S4", priority="P3",
-            steps=["扫描 DOM 所有 <img>"],
-            expected="装饰图 alt=''，内容图写描述",
-            actual=f"无 alt: {imgs[:3]}",
-            tags=["a11y"],
-        )
+def check_a11y(ctx: ScanContext) -> Outcome:
+    ctx.refresh_dom()
+    inputs = ctx.dom_info.get("inputs", [])
+    missing = [item for item in inputs if item["type"] not in ("hidden", "submit", "button", "reset", "image") and not item["accessible"]]
+    images = ctx.dom_info.get("images_without_alt", [])
+    if missing or images:
+        ctx.record(id="BUG-A11Y", title="可访问名称或图片替代文本需复核", category="A11Y-01", module="可访问性",
+                   severity="S3", priority="P2",
+                   actual=f"未识别名称的输入控件 {len(missing)} 个；未声明 alt 的图片 {len(images)} 张",
+                   evidence=[{"type": "dom", "content": f"inputs={len(missing)}, images={len(images)}"}])
+        return Outcome("NeedsReview", "发现基础可访问性候选；需结合语义与人工检查确认")
+    return Outcome("Pass", "基础 DOM 检查未发现候选；不代表通过全部 WCAG 检查")
 
 
-def check_sensitive_storage(ctx: ScanContext):
-    """localStorage 中是否明文存了敏感信息。"""
-    ctx.goto()
-    storage = ctx.page.evaluate(
-        "() => Object.fromEntries(Object.keys(localStorage).map(k => [k, localStorage.getItem(k)]))"
-    )
-    suspicious = {
-        k: (v[:60] + "…") if v and len(v) > 60 else v
-        for k, v in storage.items()
-        if k.lower() in ("token", "access_token", "password", "pwd", "secret")
-        or (v and "Bearer " in str(v))
-    }
+def check_sensitive_storage(ctx: ScanContext) -> Outcome:
+    # 只读取键名，凭据值不进入 Python、日志、截图说明或报告。
+    keys = ctx.page.evaluate("() => Object.keys(localStorage)")
+    suspicious = [key for key in keys if SENSITIVE.search(key)]
     if suspicious:
-        ctx.record(
-            id="BUG-L4-STORAGE-SECRET",
-            title="localStorage 中疑似存储敏感凭证",
-            category="SEC-01", module="安全",
-            severity="S2", priority="P1",
-            status="待验证",
-            steps=["打开页面", "DevTools → Application → Local Storage"],
-            expected="敏感凭证应存 HttpOnly cookie",
-            actual=json.dumps(suspicious, ensure_ascii=False),
-            suggestion="token 搬去 HttpOnly cookie；确需前端可读的先短期 + 刷新机制",
-            tags=["security"],
-        )
+        ctx.record(id="BUG-STORAGE", title="浏览器存储中存在敏感命名字段", category="SEC-01", module="安全",
+                   severity="S2", priority="P1", actual=f"疑似敏感字段 {len(suspicious)} 个；未采集其值",
+                   evidence=[{"type": "storage_keys", "content": ", ".join(suspicious)}])
+        return Outcome("NeedsReview", "需核实字段用途、凭据生命周期和威胁模型")
+    return Outcome("Pass", "未发现敏感命名字段；未读取或判断任意存储值")
 
 
 CHECKS = [
-    check_xss,
-    check_cookie_flags,
-    check_a11y,
-    check_sensitive_storage,
+    CheckSpec("xss-probe", "登录输入脚本探针", "L4", check_xss, module="安全", active=True, security=True,
+              applies=lambda ctx: fields(ctx) is not None),
+    CheckSpec("cookie-flags", "会话 Cookie 属性", "L4", check_cookie_flags, module="安全"),
+    CheckSpec("basic-a11y", "基础可访问性", "L4", check_a11y, module="可访问性"),
+    CheckSpec("storage-keys", "敏感存储字段", "L4", check_sensitive_storage, module="安全"),
 ]

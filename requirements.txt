@@ -1,0 +1,5 @@
+# Python >= 3.9；沿用现有 Python / Playwright 技术栈。
+playwright>=1.45,<2
+openpyxl>=3.1,<4
+PyYAML>=6,<7
+requests>=2.31,<3

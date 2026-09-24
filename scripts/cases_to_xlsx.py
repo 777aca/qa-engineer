@@ -40,6 +40,7 @@ import json
 import pathlib
 import sys
 from typing import Any
+from data_contract import DataError, load_document, normalize_document, sheet_title, literal_cells
 
 
 try:
@@ -71,6 +72,10 @@ STANDARD_COLUMNS = [
     ("actual", "实际结果", 25),
     ("executor", "执行人", 10),
     ("result", "结果", 10),
+    ("level", "档位", 8),
+    ("platform", "平台", 10),
+    ("linked_bug", "关联 Bug", 24),
+    ("evidence", "证据", 40),
 ]
 
 # 禅道官方导入模板列顺序（可按自家禅道微调）
@@ -110,11 +115,7 @@ PRIORITY_FILL = {
 # ---------- 工具 ----------
 
 def load_cases(path: str) -> dict[str, Any]:
-    text = pathlib.Path(path).read_text(encoding="utf-8")
-    if path.endswith((".yaml", ".yml")):
-        import yaml
-        return yaml.safe_load(text)
-    return json.loads(text)
+    return normalize_document(load_document(path))
 
 
 def _flatten(value: Any) -> str:
@@ -140,11 +141,12 @@ def _flatten_simple(value: Any) -> str:
 # ---------- 主逻辑 ----------
 
 def build_workbook(data: dict[str, Any], format_name: str) -> Workbook:
+    data = normalize_document(data)
     columns = ZENTAO_COLUMNS if format_name == "zentao" else STANDARD_COLUMNS
     wb = Workbook()
     ws = wb.active
     project = data.get("project", "测试用例")
-    ws.title = project[:30]  # Excel sheet 名上限 31 字符
+    ws.title = sheet_title(project, "测试用例")
 
     # 写表头
     for col_idx, (key, header, width) in enumerate(columns, start=1):
@@ -163,8 +165,10 @@ def build_workbook(data: dict[str, Any], format_name: str) -> Workbook:
             raw = case.get(key)
             if key in ("steps", "expected"):
                 value = _flatten(raw)
-            elif key in ("preconditions", "tags"):
+            elif key in ("preconditions", "tags", "linked_bug"):
                 value = _flatten_simple(raw)
+            elif key == "evidence":
+                value = json.dumps(raw, ensure_ascii=False) if raw else ""
             else:
                 value = "" if raw is None else str(raw)
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
@@ -193,7 +197,7 @@ def build_workbook(data: dict[str, Any], format_name: str) -> Workbook:
             ws.add_data_validation(dv)
 
         if result_col:
-            dv = DataValidation(type="list", formula1='"Pass,Fail,Blocked,N/A"', allow_blank=True)
+            dv = DataValidation(type="list", formula1='"Pass,Fail,Blocked,Skipped,Error,NeedsReview,N/A"', allow_blank=True)
             result_range = f"{get_column_letter(result_col)}2:{get_column_letter(result_col)}{last_row}"
             dv.add(result_range)
             ws.add_data_validation(dv)
@@ -222,6 +226,7 @@ def build_workbook(data: dict[str, Any], format_name: str) -> Workbook:
         ws.cell(row=meta_row + 3, column=1, value="创建时间：").font = Font(bold=True)
         ws.cell(row=meta_row + 3, column=2, value=str(data.get("created", "")))
 
+    literal_cells(wb)
     return wb
 
 
@@ -233,8 +238,12 @@ def main() -> int:
                         help="输出格式：standard（默认）或 zentao（禅道导入模板）")
     args = parser.parse_args()
 
-    data = load_cases(args.input)
-    wb = build_workbook(data, args.format)
+    try:
+        data = load_cases(args.input)
+        wb = build_workbook(data, args.format)
+    except (DataError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     if args.output:
         out_path = pathlib.Path(args.output)
